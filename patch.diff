@@ -1,0 +1,281 @@
+diff --git a/main.tf b/main.tf
+index e6a8d7c..b85343b 100644
+--- a/main.tf
++++ b/main.tf
+@@ -60,6 +60,34 @@ data "aws_iam_policy_document" "cloudtrail_policy" {
+     }
+   }
+ }
++###
++resource "aws_iam_role_policy_attachment" "cloudwatch_logs" {
++
++  policy_arn = aws_iam_policy.cloudtrail_cloudwatch_logs.arn
++  role       = aws_iam_role.cloudtrail_to_cloudwatch.name
++}
++resource "aws_iam_policy" "cloudtrail_cloudwatch_logs" {
++
++  name   = "${var.namespace}-cloudtrail-cloudwatch-logs-policy"
++  policy = data.aws_iam_policy_document.cloudtrail_cloudwatch_logs.json
++
++}
++
++data "aws_iam_policy_document" "cloudtrail_cloudwatch_logs" {
++
++  statement {
++    effect = "Allow"
++    actions = [
++      "logs:CreateLogStream",
++      "logs:PutLogEvents",
++    ]
++    resources = ["arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:${var.namespace}_cloudtrail:*"]
++  }
++}
++
++###
++
++
+ 
+ # --------------------------------------------------------------------
+ # Setting up permissions to allow cloudtrail to push logs to cloudwatch
+@@ -123,7 +151,7 @@ resource "aws_cloudtrail" "cloudtrail" {
+   enable_logging                = true
+   is_multi_region_trail         = true
+   enable_log_file_validation    = true
+-  cloud_watch_logs_group_arn    = aws_cloudwatch_log_group.cloudtrail.arn
++  cloud_watch_logs_group_arn    = "${aws_cloudwatch_log_group.cloudtrail.arn}:*"
+   cloud_watch_logs_role_arn     = aws_iam_role.cloudtrail_to_cloudwatch.arn
+   # kms_key_id                    = "${aws_kms_key.cloudtrail_key.arn}"
+ 
+@@ -144,145 +172,6 @@ resource "aws_sns_topic" "security_alerts" {
+ # Setting up cloudwatch metrics and alarms
+ # --------------------------------------------------------------------
+ 
+-# ----------------------
+-# Metric and alarm for Root Login
+-# ----------------------
+-resource "aws_cloudwatch_log_metric_filter" "root_login" {
+-  name           = "root-access"
+-  pattern        = "{$.userIdentity.type = Root}"
+-  log_group_name = aws_cloudwatch_log_group.cloudtrail.name
+-
+-  metric_transformation {
+-    name      = "RootAccessCount"
+-    namespace = "CloudTrail"
+-    value     = "1"
+-  }
+-}
+-
+-resource "aws_cloudwatch_metric_alarm" "root_login" {
+-  alarm_name          = "root-access-${data.aws_region.current.name}"
+-  comparison_operator = "GreaterThanOrEqualToThreshold"
+-  evaluation_periods  = "1"
+-  metric_name         = "RootAccessCount"
+-  namespace           = "CloudTrail"
+-  period              = "60"
+-  statistic           = "Sum"
+-  threshold           = "1"
+-  alarm_description   = "Use of the root account has been detected"
+-  alarm_actions       = [aws_sns_topic.security_alerts.arn]
+-}
+-
+-# ----------------------
+-# Metric and alarm for console without MFA
+-# ----------------------
+-resource "aws_cloudwatch_log_metric_filter" "console_login_without_mfa" {
+-  name           = "console-login-without-mfa"
+-  pattern        = "{$.eventName = ConsoleLogin && $.additionalEventData.MFAUsed = No}"
+-  log_group_name = aws_cloudwatch_log_group.cloudtrail.name
+-
+-  metric_transformation {
+-    name      = "ConsoleLoginWithoutMFACount"
+-    namespace = "CloudTrail"
+-    value     = "1"
+-  }
+-}
+-
+-resource "aws_cloudwatch_metric_alarm" "console_login_without_mfa" {
+-  alarm_name          = "console-login-without-mfa-${data.aws_region.current.name}"
+-  comparison_operator = "GreaterThanOrEqualToThreshold"
+-  evaluation_periods  = "1"
+-  metric_name         = "ConsoleLoginWithoutMFACount"
+-  namespace           = "CloudTrail"
+-  period              = "60"
+-  statistic           = "Sum"
+-  threshold           = "1"
+-  alarm_description   = "Use of the console by an account without MFA has been detected"
+-  alarm_actions       = [aws_sns_topic.security_alerts.arn]
+-}
+-
+-# ----------------------
+-# Metric and alarm for actions triggered by accounts without MFA
+-# ----------------------
+-resource "aws_cloudwatch_log_metric_filter" "action_without_mfa" {
+-  name           = "action-without-mfa"
+-  pattern        = "{$.userIdentity.type != AssumedRole && $.userIdentity.sessionContext.attributes.mfaAuthenticated != true}"
+-  log_group_name = aws_cloudwatch_log_group.cloudtrail.name
+-
+-  metric_transformation {
+-    name      = "ActionWithoutMFACount"
+-    namespace = "CloudTrail"
+-    value     = "1"
+-  }
+-}
+-
+-resource "aws_cloudwatch_metric_alarm" "action_without_mfa" {
+-  alarm_name          = "action-without-mfa-${data.aws_region.current.name}"
+-  comparison_operator = "GreaterThanOrEqualToThreshold"
+-  evaluation_periods  = "1"
+-  metric_name         = "ActionWithoutMFACount"
+-  namespace           = "CloudTrail"
+-  period              = "60"
+-  statistic           = "Sum"
+-  threshold           = "1"
+-  alarm_description   = "Actions triggered by a user account without MFA has been detected"
+-  alarm_actions       = [aws_sns_topic.security_alerts.arn]
+-}
+-
+-# ----------------------
+-# Metric and alarm for key alias changes or key deletions
+-# ----------------------
+-resource "aws_cloudwatch_log_metric_filter" "illegal_key_use" {
+-  name           = "illegal-key-use"
+-  pattern        = "{$.eventSource = kms.amazonaws.com && ($.eventName = DeleteAlias || $.eventName = DisableKey)}"
+-  log_group_name = aws_cloudwatch_log_group.cloudtrail.name
+-
+-  metric_transformation {
+-    name      = "KeyChangeOrDelete"
+-    namespace = "CloudTrail"
+-    value     = "1"
+-  }
+-}
+-
+-resource "aws_cloudwatch_metric_alarm" "illegal_key_use" {
+-  alarm_name          = "illegal-key-use-${data.aws_region.current.name}"
+-  comparison_operator = "GreaterThanOrEqualToThreshold"
+-  evaluation_periods  = "1"
+-  metric_name         = "KeyChangeOrDelete"
+-  namespace           = "CloudTrail"
+-  period              = "60"
+-  statistic           = "Sum"
+-  threshold           = "1"
+-  alarm_description   = "A key alias has been changed or a key has been deleted"
+-  alarm_actions       = [aws_sns_topic.security_alerts.arn]
+-}
+-
+-# ----------------------
+-# Metric and alarm for use of KMS keys by users
+-# ----------------------
+-resource "aws_cloudwatch_log_metric_filter" "kms_decrypt" {
+-  name           = "kms-decrypt"
+-  pattern        = "{($.userIdentity.type = IAMUser || $.userIdentity.type = AssumeRole) && $.eventSource = kms.amazonaws.com && $.eventName = Decrypt}"
+-  log_group_name = aws_cloudwatch_log_group.cloudtrail.name
+-
+-  metric_transformation {
+-    name      = "KmsDecrypt"
+-    namespace = "CloudTrail"
+-    value     = "1"
+-  }
+-}
+-
+-resource "aws_cloudwatch_metric_alarm" "kms_decrypt" {
+-  alarm_name          = "kms-decrypt-${data.aws_region.current.name}"
+-  comparison_operator = "GreaterThanOrEqualToThreshold"
+-  evaluation_periods  = "1"
+-  metric_name         = "KmsDecrypt"
+-  namespace           = "CloudTrail"
+-  period              = "60"
+-  statistic           = "Sum"
+-  threshold           = "1"
+-  alarm_description   = "A KMS key has been used to decrypt something"
+-  alarm_actions       = [aws_sns_topic.security_alerts.arn]
+-}
+ 
+ # ----------------------
+ # Metric and alarm for changes to security groups
+@@ -312,86 +201,3 @@ resource "aws_cloudwatch_metric_alarm" "security_group_changes" {
+   alarm_actions       = [aws_sns_topic.security_alerts.arn]
+ }
+ 
+-# ----------------------
+-# Metric and alarm for changes to IAM resources
+-# ----------------------
+-resource "aws_cloudwatch_log_metric_filter" "iam_changes" {
+-  name           = "iam-changes"
+-  pattern        = "{$.eventSource = iam.* && $.eventName != Get* && $.eventName != List*}"
+-  log_group_name = aws_cloudwatch_log_group.cloudtrail.name
+-
+-  metric_transformation {
+-    name      = "IamChanges"
+-    namespace = "CloudTrail"
+-    value     = "1"
+-  }
+-}
+-
+-resource "aws_cloudwatch_metric_alarm" "iam_changes" {
+-  alarm_name          = "iam-changes-${data.aws_region.current.name}"
+-  comparison_operator = "GreaterThanOrEqualToThreshold"
+-  evaluation_periods  = "1"
+-  metric_name         = "IamChanges"
+-  namespace           = "CloudTrail"
+-  period              = "60"
+-  statistic           = "Sum"
+-  threshold           = "1"
+-  alarm_description   = "IAM Resources have been changed"
+-  alarm_actions       = [aws_sns_topic.security_alerts.arn]
+-}
+-
+-# ----------------------
+-# Metric and alarm for changes to route table resources
+-# ----------------------
+-resource "aws_cloudwatch_log_metric_filter" "route_table_changes" {
+-  name           = "route-table-changes"
+-  pattern        = "{$.eventSource = ec2.* && ($.eventName = AssociateRouteTable || $.eventName = CreateRoute* || $.eventName = CreateVpnConnectionRoute || $.eventName = DeleteRoute* || $.eventName = DeleteVpnConnectionRoute || $.eventName = DisableVgwRoutePropagation || $.eventName = DisassociateRouteTable || $.eventName = EnableVgwRoutePropagation || $.eventName = ReplaceRoute*)}"
+-  log_group_name = aws_cloudwatch_log_group.cloudtrail.name
+-
+-  metric_transformation {
+-    name      = "RouteTableChanges"
+-    namespace = "CloudTrail"
+-    value     = "1"
+-  }
+-}
+-
+-resource "aws_cloudwatch_metric_alarm" "route_table_changes" {
+-  alarm_name          = "route-table-changes-${data.aws_region.current.name}"
+-  comparison_operator = "GreaterThanOrEqualToThreshold"
+-  evaluation_periods  = "1"
+-  metric_name         = "RouteTableChanges"
+-  namespace           = "CloudTrail"
+-  period              = "60"
+-  statistic           = "Sum"
+-  threshold           = "1"
+-  alarm_description   = "Route Table Resources have been changed"
+-  alarm_actions       = [aws_sns_topic.security_alerts.arn]
+-}
+-
+-# ----------------------
+-# Metric and alarm for changes to NACL
+-# ----------------------
+-resource "aws_cloudwatch_log_metric_filter" "nacl_changes" {
+-  name           = "nacl-changes"
+-  pattern        = "{$.eventSource = ec2.* && ($.eventName = CreateNetworkAcl* || $.eventName = DeleteNetworkAcl* || $.eventName = ReplaceNetworkAcl*)}"
+-  log_group_name = aws_cloudwatch_log_group.cloudtrail.name
+-
+-  metric_transformation {
+-    name      = "NaclChanges"
+-    namespace = "CloudTrail"
+-    value     = "1"
+-  }
+-}
+-
+-resource "aws_cloudwatch_metric_alarm" "nacl_changes" {
+-  alarm_name          = "nacl-changes-${data.aws_region.current.name}"
+-  comparison_operator = "GreaterThanOrEqualToThreshold"
+-  evaluation_periods  = "1"
+-  metric_name         = "NaclChanges"
+-  namespace           = "CloudTrail"
+-  period              = "60"
+-  statistic           = "Sum"
+-  threshold           = "1"
+-  alarm_description   = "NACL have been changed"
+-  alarm_actions       = [aws_sns_topic.security_alerts.arn]
+-}
